@@ -58,6 +58,7 @@ python3 -m http.server 8000      # then open http://localhost:8000/
 ```
 
 Opening `index.html` directly from disk also works (the bundled *Demo* button needs http).
+The repo is private and not deployed anywhere; serve it locally as above.
 Drop a GoPro file onto the video area or click **Open file**.
 
 > **Codecs.** The browser decodes the video, so H.264 GoPro files play everywhere;
@@ -98,6 +99,7 @@ js/app.js         transport, timeline, dashboard, trim, capture, exports
 fixtures/demo.mp4 12 s test clip with a synthetic GPMF track (VP9, so it plays in Chromium)
 tools/make-fixture.js  rebuilds the fixture (needs ffmpeg)
 tests/            node:test unit tests + Playwright end‑to‑end smoke test
+.github/workflows CI (unit + e2e tests)
 ```
 
 ## Development
