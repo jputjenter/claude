@@ -171,8 +171,15 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
 #dlgButtons { display: flex; justify-content: flex-end; gap: 6px; padding: 10px 16px; margin: 0; border-top: 1px solid var(--line); }
 
 @media (max-width: 900px) {
-  #main { flex-direction: column; }
-  #videoPane { width: 100% !important; border-right: none; border-bottom: 1px solid var(--line); }
+  body { overflow: auto; }
+  #app { height: auto; min-height: 100%; }
+  #main { flex-direction: column; min-height: 0; }
+  #videoPane { width: 100% !important; min-width: 0; border-right: none; border-bottom: 1px solid var(--line); }
+  #videoWrap { height: 56vw; min-height: 180px; flex: none; }
   #splitter { display: none; }
+  #dashPane { overflow: visible; min-width: 0; }
+  .dash, .dash.cols-2, .dash.cols-3, .dash.cols-4 { grid-template-columns: 1fr; }
+  .panel.span-full { grid-column: auto; }
   .ellipsis { max-width: 40vw; }
+  .timecode { min-width: 0; }
 }
