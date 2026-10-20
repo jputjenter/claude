@@ -1,0 +1,16 @@
+{
+  "name": "heroscope",
+  "version": "0.1.0",
+  "description": "Static in-browser viewer for GoPro video with GPMF telemetry graphs, configurable dashboard, virtual trim and screenshots.",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/unit.test.js",
+    "e2e": "node tests/e2e.js",
+    "fixture": "node tools/make-fixture.js",
+    "serve": "python3 -m http.server 8000"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  },
+  "license": "MIT"
+}

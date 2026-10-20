@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HeroScope — GoPro GPMF telemetry viewer</title>
+<meta name="description" content="Static, in-browser viewer for GoPro MP4 files: frame-accurate video playback, GPMF telemetry graphs, configurable dashboard, virtual trim and screenshots. No upload, no install.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231a1a19'/%3E%3Cpolyline points='4,20 9,20 12,9 16,25 20,14 23,20 28,20' fill='none' stroke='%233987e5' stroke-width='2.5' stroke-linejoin='round'/%3E%3Cline x1='16' y1='4' x2='16' y2='28' stroke='%23e66767' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand" title="HeroScope — GoPro GPMF viewer"><span class="logo" aria-hidden="true"></span>HeroScope</div>
+    <input type="file" id="fileInput" accept=".mp4,.MP4,.mov,.MOV,video/mp4,video/quicktime" hidden>
+    <button id="btnOpen" class="primary" title="Open a GoPro .MP4 (Ctrl+O)">Open file</button>
+    <button id="btnDemo" title="Load the bundled demo clip with synthetic telemetry">Demo</button>
+    <span id="fileName" class="muted ellipsis"></span>
+    <div class="spacer"></div>
+    <div class="group" aria-label="Dashboard">
+      <label class="lbl">Dashboard
+        <select id="presetSelect" title="Dashboard presets">
+          <option value="">presets…</option>
+          <option value="default">Default</option>
+          <option value="motion">Motion (IMU)</option>
+          <option value="gps">GPS</option>
+          <option value="camera">Camera</option>
+          <option value="all">Every stream</option>
+          <option value="blank">Blank</option>
+        </select>
+      </label>
+      <button id="btnAddPanel" title="Add a panel">+ Panel</button>
+      <label class="lbl">Cols
+        <select id="colsSelect" title="Dashboard columns"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+      </label>
+      <button id="btnExportLayout" title="Download the dashboard layout as JSON">Export</button>
+      <button id="btnImportLayout" title="Load a dashboard layout JSON">Import</button>
+      <input type="file" id="layoutInput" accept=".json,application/json" hidden>
+    </div>
+    <div class="group" aria-label="Graph options">
+      <button id="btnCursor" class="toggle on" title="Toggle the video-position line on graphs (C)">Cursor</button>
+      <button id="btnFollow" class="toggle on" title="Scroll graphs to keep the cursor in view">Follow</button>
+      <button id="btnLink" class="toggle on" title="Link the time axis of all graphs">Link X</button>
+    </div>
+    <div class="group" aria-label="Capture">
+      <button id="btnScreenshot" title="Screenshot of the whole interface (S)">⌗ Screenshot</button>
+      <button id="btnFrame" title="Save the current video frame at full resolution (F)">▣ Frame PNG</button>
+      <button id="btnExportCsv" title="Export telemetry as CSV">CSV</button>
+    </div>
+    <button id="btnTheme" class="icon" title="Toggle light/dark theme">◐</button>
+    <button id="btnHelp" class="icon" title="Keyboard shortcuts &amp; help (?)">?</button>
+  </header>
+
+  <main id="main">
+    <section id="videoPane">
+      <div id="videoWrap" tabindex="0">
+        <video id="video" preload="auto" playsinline></video>
+        <div id="videoHud" class="hud"></div>
+        <div id="videoMsg" class="video-msg" hidden></div>
+        <div id="dropHint" class="drop-hint"><div><strong>Drop a GoPro .MP4 here</strong><br><span class="muted">or click “Open file”. Everything stays in your browser.</span></div></div>
+      </div>
+      <div id="timelineWrap"><canvas id="timeline"></canvas></div>
+      <div id="transport" class="bar">
+        <button id="tStart" title="Go to start (Home)">⏮</button>
+        <button id="tBack10" title="Back 10 frames (Shift+←)">⇤10</button>
+        <button id="tBack1" title="Previous frame (←)">◁</button>
+        <button id="tPlay" class="primary wide" title="Play / pause (Space)">▶</button>
+        <button id="tFwd1" title="Next frame (→)">▷</button>
+        <button id="tFwd10" title="Forward 10 frames (Shift+→)">10⇥</button>
+        <button id="tEnd" title="Go to end (End)">⏭</button>
+        <button id="tRev" class="toggle" title="Play in reverse (J)">◀ rev</button>
+        <div id="timecode" class="timecode" title="Timecode HH:MM:SS:FF · frame · seconds">
+          <span id="tcMain">00:00:00:00</span>
+          <span id="tcFrame" class="muted">F 0 / 0</span>
+          <span id="tcSec" class="muted">0.000 s</span>
+        </div>
+        <label class="lbl speed" title="Playback speed (↑ / ↓)">Speed
+          <input type="range" id="speed" min="-1" max="0.9031" step="0.001" value="0">
+          <span id="speedVal" class="mono">1.00×</span>
+        </label>
+        <button id="tLoop" class="toggle on" title="Loop playback (within trim range)">Loop</button>
+        <button id="tMute" class="toggle" title="Mute audio">Mute</button>
+        <label class="lbl" title="Video zoom (wheel over video, drag to pan)">Zoom
+          <select id="zoomSelect"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+        </label>
+        <button id="tHud" class="toggle on" title="Show timecode overlay on the video">HUD</button>
+      </div>
+      <div id="transport2" class="bar">
+        <span class="lbl-static">Trim</span>
+        <button id="tIn" title="Set in point at current frame (I)">⟦ In</button>
+        <button id="tOut" title="Set out point at current frame (O)">Out ⟧</button>
+        <button id="tGoIn" title="Jump to in point (Shift+I)">⇤ in</button>
+        <button id="tGoOut" title="Jump to out point (Shift+O)">out ⇥</button>
+        <button id="tClearTrim" title="Clear trim">Clear</button>
+        <span id="trimInfo" class="mono muted"></span>
+        <button id="btnExportTrim" title="Export trim as JSON / ffmpeg command">Export trim…</button>
+        <span class="sep"></span>
+        <span class="lbl-static">Markers</span>
+        <button id="tMark" title="Add marker at current frame (M)">+ Mark</button>
+        <button id="tPrevMark" title="Previous marker (,)">‹</button>
+        <button id="tNextMark" title="Next marker (.)">›</button>
+        <button id="tClearMarks" title="Remove all markers">Clear</button>
+        <span id="markInfo" class="mono muted"></span>
+        <span class="sep"></span>
+        <label class="lbl chk" title="Burn timecode into exported frame PNGs"><input type="checkbox" id="burnTc"> burn-in TC</label>
+      </div>
+    </section>
+    <div id="splitter" title="Drag to resize"></div>
+    <section id="dashPane">
+      <div id="dash" class="dash"></div>
+    </section>
+  </main>
+  <footer id="status" class="status">Ready. Open a GoPro MP4 to begin.</footer>
+  <div id="toast" class="toast" hidden></div>
+  <dialog id="dlg"><form method="dialog" class="dlg-form"><h2 id="dlgTitle"></h2><div id="dlgBody"></div><menu id="dlgButtons"></menu></form></dialog>
+</div>
+<script src="js/mp4.js"></script>
+<script src="js/gpmf.js"></script>
+<script src="js/plot.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
