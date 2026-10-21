@@ -468,6 +468,8 @@
       sel.addEventListener('change', () => { p.stream = sel.value; rerenderPanel(p); });
       head.append(sel);
     }
+    const expBtn = el('button', { text: '⤓', title: 'Export this panel (CSV, JSON, PNG; GeoJSON/GPX/KML for GPS tracks)', onclick: () => exportPanelDialog(p) });
+    head.append(expBtn);
     const hsel = el('select', { title: 'Panel height' });
     for (const [v, l] of [['s', 'S'], ['m', 'M'], ['l', 'L'], ['xl', 'XL']]) hsel.append(el('option', { value: v, text: l }));
     hsel.value = p.h || 'm';
@@ -781,6 +783,206 @@
   $('btnFrame').addEventListener('click', exportFrame);
   $('btnScreenshot').addEventListener('click', e => { if (e.shiftKey) screenshotExact(); else screenshotUI(); });
 
+  // ---------------- per-panel exports
+  function interp(times, values, t) {
+    const n = times.length; if (!n) return NaN;
+    const i = TimeChart.lowerBound(times, t);
+    if (i <= 0) return values[0]; if (i >= n) return values[n - 1];
+    const t0 = times[i - 1], t1 = times[i], a = values[i - 1], b = values[i];
+    if (a !== a) return b; if (b !== b) return a;
+    return t1 > t0 ? a + (b - a) * (t - t0) / (t1 - t0) : b;
+  }
+  function rangeBounds(kind) {
+    if (kind === 'trim' && hasTrim()) return [S.trim.in, S.trim.out];
+    if (kind === 'view') return [S.view.t0, S.view.t1];
+    return [-Infinity, Infinity];
+  }
+  const num = v => v !== v ? '' : (Number.isInteger(v) ? String(v) : v.toPrecision(9).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, ''));
+  const safe = s => String(s).replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '');
+  const colName = s => (s.label + (s.unit ? ' [' + s.unit + ']' : ''));
+  const csvCell = v => /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  function panelSeries(p) { return (p.series || []).map((r, i) => resolveSeries(r, i)).filter(Boolean); }
+  function fileStem(p) { return `${baseName()}_${safe(p.title || p.type)}`; }
+
+  function seriesCsvWide(list, lo, hi) {
+    // time base: the series with the most samples in range; others are linearly interpolated onto it
+    let base = null, bestN = -1;
+    for (const s of list) { const n = TimeChart.lowerBound(s.times, hi) - TimeChart.lowerBound(s.times, lo); if (n > bestN) { bestN = n; base = s; } }
+    if (!base) return '';
+    const rows = [['time_s', 'frame'].concat(list.map(colName)).map(csvCell).join(',')];
+    const a = TimeChart.lowerBound(base.times, lo), b = TimeChart.lowerBound(base.times, hi);
+    for (let i = a; i < b; i++) {
+      const t = base.times[i];
+      rows.push([t.toFixed(6), frameOf(t)].concat(list.map(s => num(s === base ? s.values[i] : interp(s.times, s.values, t)))).join(','));
+    }
+    return rows.join('\n');
+  }
+  function seriesCsvLong(list, lo, hi) {
+    const rows = ['time_s,frame,series,unit,value'];
+    for (const s of list) {
+      const a = TimeChart.lowerBound(s.times, lo), b = TimeChart.lowerBound(s.times, hi);
+      for (let i = a; i < b; i++) rows.push([s.times[i].toFixed(6), frameOf(s.times[i]), csvCell(s.label), csvCell(s.unit), num(s.values[i])].join(','));
+    }
+    return rows.join('\n');
+  }
+  function seriesJson(p, list, lo, hi, rangeKind) {
+    return JSON.stringify({
+      file: S.file && S.file.name, panel: p.title, fps: S.fps, range: rangeKind, from_s: isFinite(lo) ? lo : 0, to_s: isFinite(hi) ? hi : S.duration,
+      series: list.map(s => { const a = TimeChart.lowerBound(s.times, lo), b = TimeChart.lowerBound(s.times, hi); const [stream, comp] = s.id.split(':'); return { label: s.label, unit: s.unit, stream, component: +comp, color: s.color, times: Array.from(s.times.subarray(a, b)), values: Array.from(s.values.subarray(a, b), v => v === v ? v : null) }; }),
+    }, null, 1);
+  }
+  function chartPng(p, ch) {
+    const list = ch.series;
+    const pad = 12, titleH = 26, legendH = list.length ? 22 : 0, dpr = ch._dpr;
+    const w = ch._w, h = ch._h;
+    const c = document.createElement('canvas'); c.width = Math.round((w + 2 * pad) * dpr); c.height = Math.round((h + titleH + legendH + 2 * pad) * dpr);
+    const ctx = c.getContext('2d'); ctx.scale(dpr, dpr);
+    ctx.fillStyle = cssVar('--surface-1'); ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = cssVar('--text-primary'); ctx.font = '600 14px ' + cssVar('--font'); ctx.textBaseline = 'middle';
+    ctx.fillText(p.title || 'Chart', pad, pad + titleH / 2);
+    ctx.font = '11px ' + cssVar('--font'); ctx.fillStyle = cssVar('--text-secondary'); ctx.textAlign = 'right';
+    ctx.fillText(`${S.file ? S.file.name : ''}  ·  ${timecode(currentTime())}`, pad + w, pad + titleH / 2); ctx.textAlign = 'left';
+    ctx.drawImage(ch.base, pad, pad + titleH, w, h); ctx.drawImage(ch.over, pad, pad + titleH, w, h);
+    let x = pad + 4; const ly = pad + titleH + h + legendH / 2;
+    ctx.font = '12px ' + cssVar('--font');
+    for (const s of list) { ctx.fillStyle = s.color; ctx.fillRect(x, ly - 2, 14, 4); x += 18; ctx.fillStyle = cssVar('--text-primary'); const txt = colName(s); ctx.fillText(txt, x, ly); x += ctx.measureText(txt).width + 16; }
+    return new Promise(res => c.toBlob(res, 'image/png'));
+  }
+
+  // --- GPS helpers
+  function parseGpsu(v) { // "yymmddhhmmss.sss" → ms since epoch
+    const m = /^(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d+))?/.exec(String(v));
+    if (!m) return NaN;
+    return Date.UTC(2000 + +m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], m[7] ? Math.round(+('0.' + m[7]) * 1000) : 0);
+  }
+  function gpsPoints(s, lo, hi, requireFix) {
+    const isGps9 = s.key === 'GPS9';
+    const gpsu = (s.attrs.GPSU || []).map(a => ({ t: a.t, ms: parseGpsu(a.v) })).filter(a => a.ms === a.ms);
+    const gpsf = s.attrs.GPSF || [];
+    const base = S.info && S.info.creation ? S.info.creation.getTime() : NaN;
+    const attrAt = (list, t) => { let r = null; for (const a of list) { if (a.t <= t + 1e-9) r = a; else break; } return r; };
+    const pts = [];
+    const a = TimeChart.lowerBound(s.times, lo), b = TimeChart.lowerBound(s.times, hi);
+    for (let i = a; i < b; i++) {
+      const lat = s.cols[0][i], lon = s.cols[1][i];
+      if (!(lat === lat && lon === lon) || (lat === 0 && lon === 0)) continue;
+      const t = s.times[i];
+      let fix = null;
+      if (isGps9) fix = s.cols[8] ? s.cols[8][i] : null; else { const f = attrAt(gpsf, t); fix = f ? +f.v : null; }
+      if (requireFix && fix !== null && fix < 2) continue;
+      let ms = NaN;
+      if (isGps9 && s.cols[5] && s.cols[6]) ms = Date.UTC(2000, 0, 1) + s.cols[5][i] * 86400000 + s.cols[6][i] * 1000;
+      else { const g = attrAt(gpsu, t); if (g) ms = g.ms + (t - g.t) * 1000; else if (base === base) ms = base + t * 1000; }
+      pts.push({ t, lat, lon, alt: s.cols[2] ? s.cols[2][i] : NaN, v2: s.cols[3] ? s.cols[3][i] : NaN, v3: s.cols[4] ? s.cols[4][i] : NaN, fix, dop: isGps9 && s.cols[7] ? s.cols[7][i] : (attrAt(s.attrs.GPSP || [], t) || { v: NaN }).v / 100, ms });
+    }
+    return pts;
+  }
+  const iso = ms => ms === ms ? new Date(ms).toISOString() : '';
+  const r7 = v => Math.round(v * 1e7) / 1e7, r2 = v => Math.round(v * 100) / 100;
+  function trackGeoJson(p, s, pts) {
+    const coords = pts.map(q => q.alt === q.alt ? [r7(q.lon), r7(q.lat), r2(q.alt)] : [r7(q.lon), r7(q.lat)]);
+    const line = { type: 'Feature', properties: { name: p.title || 'GPS track', source: S.file && S.file.name, stream: s.id, points: pts.length, start: iso(pts.length ? pts[0].ms : NaN), end: iso(pts.length ? pts[pts.length - 1].ms : NaN), coordTimes: pts.map(q => iso(q.ms)), video_times_s: pts.map(q => +q.t.toFixed(3)), speed_2d_mps: pts.map(q => r2(q.v2)), speed_3d_mps: pts.map(q => r2(q.v3)) }, geometry: { type: 'LineString', coordinates: coords } };
+    const marks = S.markers.map(m => { const i = TimeChart.nearestIndex(pts.map(q => q.t), m.t); return i < 0 ? null : { type: 'Feature', properties: { name: m.label, video_time_s: +m.t.toFixed(3), timecode: timecode(m.t) }, geometry: { type: 'Point', coordinates: coords[i] } }; }).filter(Boolean);
+    return JSON.stringify({ type: 'FeatureCollection', features: [line].concat(marks) }, null, 1);
+  }
+  const xmlEsc = s => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+  function trackGpx(p, s, pts) {
+    const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<gpx version="1.1" creator="HeroScope" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">',
+      `<metadata><name>${xmlEsc(p.title || 'GPS track')}</name><desc>${xmlEsc((S.file && S.file.name) || '')} (${s.id})</desc>${pts.length && pts[0].ms === pts[0].ms ? `<time>${iso(pts[0].ms)}</time>` : ''}</metadata>`];
+    for (const m of S.markers) { const i = TimeChart.nearestIndex(pts.map(q => q.t), m.t); if (i >= 0) out.push(`<wpt lat="${r7(pts[i].lat)}" lon="${r7(pts[i].lon)}">${pts[i].alt === pts[i].alt ? `<ele>${r2(pts[i].alt)}</ele>` : ''}<name>${xmlEsc(m.label)}</name><desc>video ${timecode(m.t)}</desc></wpt>`); }
+    out.push(`<trk><name>${xmlEsc(p.title || 'GPS track')}</name><trkseg>`);
+    for (const q of pts) out.push(`<trkpt lat="${r7(q.lat)}" lon="${r7(q.lon)}">${q.alt === q.alt ? `<ele>${r2(q.alt)}</ele>` : ''}${q.ms === q.ms ? `<time>${iso(q.ms)}</time>` : ''}${q.v2 === q.v2 ? `<extensions><speed>${r2(q.v2)}</speed><videotime>${q.t.toFixed(3)}</videotime></extensions>` : ''}</trkpt>`);
+    out.push('</trkseg></trk></gpx>');
+    return out.join('\n');
+  }
+  function trackKml(p, s, pts) {
+    const name = xmlEsc(p.title || 'GPS track');
+    const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2"><Document>', `<name>${name}</name>`,
+      '<Style id="track"><LineStyle><color>ffe58739</color><width>3</width></LineStyle></Style>',
+      `<Placemark><name>${name}</name><styleUrl>#track</styleUrl><LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>`,
+      pts.map(q => `${r7(q.lon)},${r7(q.lat)},${q.alt === q.alt ? r2(q.alt) : 0}`).join(' '), '</coordinates></LineString></Placemark>'];
+    if (pts.length && pts[0].ms === pts[0].ms) {
+      out.push(`<Placemark><name>${name} (timed)</name><styleUrl>#track</styleUrl><gx:Track>`);
+      for (const q of pts) out.push(`<when>${iso(q.ms)}</when>`);
+      for (const q of pts) out.push(`<gx:coord>${r7(q.lon)} ${r7(q.lat)} ${q.alt === q.alt ? r2(q.alt) : 0}</gx:coord>`);
+      out.push('</gx:Track></Placemark>');
+    }
+    for (const m of S.markers) { const i = TimeChart.nearestIndex(pts.map(q => q.t), m.t); if (i >= 0) out.push(`<Placemark><name>${xmlEsc(m.label)}</name><description>video ${timecode(m.t)}</description><Point><coordinates>${r7(pts[i].lon)},${r7(pts[i].lat)},${pts[i].alt === pts[i].alt ? r2(pts[i].alt) : 0}</coordinates></Point></Placemark>`); }
+    out.push('</Document></kml>');
+    return out.join('\n');
+  }
+  function trackCsv(pts) {
+    const rows = ['time_s,frame,utc,lat,lon,alt_m,speed_2d_mps,speed_3d_mps,fix,dop'];
+    for (const q of pts) rows.push([q.t.toFixed(6), frameOf(q.t), iso(q.ms), r7(q.lat), r7(q.lon), num(q.alt), num(q.v2), num(q.v3), q.fix === null ? '' : q.fix, num(q.dop)].join(','));
+    return rows.join('\n');
+  }
+  function trackPng(p, root) {
+    const cv = root.querySelector('.track-canvas'); const dpr = window.devicePixelRatio || 1;
+    const w = cv.width / dpr, h = cv.height / dpr, pad = 12, titleH = 26;
+    const c = document.createElement('canvas'); c.width = Math.round((w + 2 * pad) * dpr); c.height = Math.round((h + titleH + 2 * pad) * dpr);
+    const ctx = c.getContext('2d'); ctx.scale(dpr, dpr);
+    ctx.fillStyle = cssVar('--surface-1'); ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = cssVar('--text-primary'); ctx.font = '600 14px ' + cssVar('--font'); ctx.textBaseline = 'middle'; ctx.fillText(p.title || 'GPS track', pad, pad + titleH / 2);
+    ctx.drawImage(cv, pad, pad + titleH, w, h);
+    return new Promise(res => c.toBlob(res, 'image/png'));
+  }
+  function infoJson() {
+    const st = streamsSorted().map(s => ({ id: s.id, key: s.key, name: s.name, device: s.device, rate_hz: +s.rate.toFixed(3), samples: s.count, components: s.labels, units: s.units, scale: s.scale, t0: s.t0, t1: s.t1, attributes: Object.fromEntries(Object.entries(s.attrs).map(([k, v]) => [k, v.slice(0, 3).map(a => a.v)])) }));
+    const info = S.info ? Object.assign({}, S.info, { udta: Object.fromEntries(Object.entries(S.info.udta || {}).filter(([k]) => k !== 'GPMF')), globalGpmf: S.info.udta && S.info.udta.GPMF ? GPMF.flatten(S.info.udta.GPMF).filter(x => x.value).map(x => [x.key, x.value]) : undefined }) : null;
+    return JSON.stringify({ file: info, fps: S.fps, frames: S.frames, trim: S.trim, markers: S.markers, streams: st }, null, 1);
+  }
+
+  const FORMATS = {
+    chart: [['csv', 'CSV — wide table, all series resampled to the fastest one'], ['csvlong', 'CSV — long table (time, series, value)'], ['json', 'JSON — raw samples per series'], ['png', 'PNG — image of this chart']],
+    values: [['csv', 'CSV — wide table, all series resampled to the fastest one'], ['csvlong', 'CSV — long table (time, series, value)'], ['json', 'JSON — raw samples per series']],
+    track: [['geojson', 'GeoJSON — LineString with times and speeds, markers as Points'], ['gpx', 'GPX 1.1 — track with elevation and time, markers as waypoints'], ['kml', 'KML — Google Earth path (+ timed gx:Track)'], ['csv', 'CSV — time, UTC, lat, lon, alt, speed, fix'], ['png', 'PNG — image of the track']],
+    info: [['json', 'JSON — file, video and stream details']],
+  };
+  function exportPanelDialog(p) {
+    if (!S.file) { toast('Open a file first'); return; }
+    const formats = FORMATS[p.type] || [];
+    const fmt = el('select');
+    for (const [v, l] of formats) fmt.append(el('option', { value: v, text: l }));
+    const range = el('select');
+    range.append(el('option', { value: 'full', text: 'Full clip' }));
+    if (hasTrim()) range.append(el('option', { value: 'trim', text: `Trim range (${timecode(S.trim.in)} → ${timecode(S.trim.out - 0.5 / S.fps)})` }));
+    if (p.type === 'chart' || p.type === 'values') range.append(el('option', { value: 'view', text: `Visible range (${TimeChart.fmtTime(S.view.t0, 0.01)} → ${TimeChart.fmtTime(S.view.t1, 0.01)})` }));
+    if (hasTrim()) range.value = 'trim';
+    const fixOnly = el('input', { type: 'checkbox' }); fixOnly.checked = true;
+    const body = el('div', {}, el('label', {}, 'Format', fmt), p.type !== 'info' ? el('label', {}, 'Range', range) : null,
+      p.type === 'track' ? el('label', { class: 'chk' }, fixOnly, ' Skip points without a GPS fix (GPSF < 2)') : null,
+      el('p', { class: 'muted', text: p.type === 'track' ? 'Coordinates are WGS84 (lon, lat, alt). Absolute times come from the GPSU/GPS9 clock when the file has it, otherwise from the file creation time.' : 'Wide CSV uses the fastest series as the time base and linearly interpolates the others onto it; long CSV and JSON keep every series at its own sample times.' }));
+    dialog({ title: `Export “${p.title || p.type}”`, body, buttons: [{ label: 'Cancel' }, { label: 'Download', primary: true, onClick: () => { exportPanel(p, fmt.value, range.value, fixOnly.checked).catch(e => toast('Export failed: ' + e.message)); } }] });
+  }
+  async function exportPanel(p, fmt, rangeKind, fixOnly) {
+    const [lo, hi] = rangeBounds(rangeKind);
+    const stem = fileStem(p) + (rangeKind === 'full' ? '' : '_' + rangeKind);
+    const txt = (text, ext, type) => { download(new Blob([text], { type }), `${stem}.${ext}`); };
+    if (p.type === 'chart' || p.type === 'values') {
+      const list = panelSeries(p);
+      if (!list.length && fmt !== 'png') { toast('This panel has no series'); return; }
+      if (fmt === 'csv') { const t = seriesCsvWide(list, lo, hi); txt(t, 'csv', 'text/csv'); toast(`Exported ${t.split('\n').length - 1} rows`); }
+      else if (fmt === 'csvlong') { const t = seriesCsvLong(list, lo, hi); txt(t, 'csv', 'text/csv'); toast(`Exported ${t.split('\n').length - 1} rows`); }
+      else if (fmt === 'json') txt(seriesJson(p, list, lo, hi, rangeKind), 'json', 'application/json');
+      else if (fmt === 'png') { const ch = S.charts.get(p.id); if (!ch) return; const b = await chartPng(p, ch); download(b, `${fileStem(p)}_${timecode(currentTime()).replace(/:/g, '-')}.png`); toast('Chart image saved'); }
+      return;
+    }
+    if (p.type === 'track') {
+      const s = S.streams[p.stream];
+      if (!s) { toast('No GPS stream'); return; }
+      if (fmt === 'png') { const b = await trackPng(p, S.panelEls.get(p.id)); download(b, `${fileStem(p)}.png`); return; }
+      const pts = gpsPoints(s, lo, hi, fixOnly);
+      if (!pts.length) { toast('No GPS points in this range'); return; }
+      if (fmt === 'geojson') txt(trackGeoJson(p, s, pts), 'geojson', 'application/geo+json');
+      else if (fmt === 'gpx') txt(trackGpx(p, s, pts), 'gpx', 'application/gpx+xml');
+      else if (fmt === 'kml') txt(trackKml(p, s, pts), 'kml', 'application/vnd.google-earth.kml+xml');
+      else if (fmt === 'csv') txt(trackCsv(pts), 'csv', 'text/csv');
+      toast(`Exported ${pts.length} GPS points`);
+      return;
+    }
+    if (p.type === 'info') txt(infoJson(), 'json', 'application/json');
+  }
+
   // ---------------- exports
   function exportCsvDialog() {
     const st = numericStreams();
@@ -890,5 +1092,5 @@
   }
   loadPrefs(); loadLayout(); setSpeed(1); drawTimeline();
   if (S.layout.panels.length) renderDashboard();
-  window.HeroScope = { state: S, openFile, seek, step, setView, makePreset, renderDashboard, exportFrame, screenshotUI, version: '0.1.0' };
+  window.HeroScope = { state: S, openFile, seek, step, setView, makePreset, renderDashboard, exportFrame, screenshotUI, exportPanel, version: '0.2.0' };
 })();

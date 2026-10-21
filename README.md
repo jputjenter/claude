@@ -41,6 +41,15 @@ HTML page and three scripts.
   height, full‑width toggle, reorder, per‑series colors.
 - Layout is remembered in the browser and can be exported/imported as JSON.
 
+**Per‑panel export** (the ⤓ button on every panel; full clip, trim range or visible range)
+- Charts & value tiles: CSV wide (every series resampled onto the fastest one), CSV long
+  (time, series, unit, value), JSON (raw samples per series), PNG of the chart.
+- GPS track: **GeoJSON** (LineString with `coordTimes`, speeds, markers as Points),
+  **GPX 1.1** (trkpt with ele/time, markers as waypoints), **KML** (path + timed `gx:Track`),
+  CSV (UTC, lat, lon, alt, speed, fix, DOP) and PNG. Absolute times come from the GPSU /
+  GPS9 clock; points without a fix can be skipped.
+- Info panel: JSON with file, video and stream details.
+
 **Capture**
 - **Screenshot** (S): a PNG of the whole interface, composed from the live video frame,
   every chart canvas and the UI text. Shift+S / Shift+click uses the browser's exact
